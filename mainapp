@@ -1,0 +1,302 @@
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_marshmallow import Marshmallow
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import ForeignKey, Table, Column, String, Integer, Select, DateTime, Integer
+from marshmallow import ValidationError
+from typing import List, Optional
+
+
+# Initialize Flask app
+app = Flask(__name__)
+
+
+# MySQL database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://root:Bootycheeks123@localhost/ecommerce_api'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Creating our Base Model
+class Base(DeclarativeBase):
+    pass
+
+
+# Initialize SQLAlchemy and Marshmallow
+db = SQLAlchemy(model_class=Base)
+db.init_app(app)
+ma = Marshmallow(app)
+
+# # Association Table
+# customer_orders = Table(
+#     "user_orders",
+#     Base.metadata,
+#     Column("customer_id", ForeignKey("customers.id"), primary_key=True),
+#     Column("order_id", ForeignKey("order.id"), primary_key=True)
+# )
+
+# Association Table Between Orders and Products
+order_products = Table(
+        "order_products",
+        Base.metadata,
+        Column("order_id", ForeignKey("orders.id"), primary_key=True),
+        Column("product_id", ForeignKey("products.id"), primary_key=True),
+    )
+
+# Models~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class Customer(Base):
+    __tablename__ = "customers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(30), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(200))
+    
+    #One-to-Many relationship from this Customer to a List of Order Objects
+    orders: Mapped[List["Order"]] = relationship("Order", back_populates="customer")
+
+class Order(Base):
+    __tablename__ = "orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_date: Mapped[DateTime] = mapped_column(DateTime, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
+    customer: Mapped["Customer"] = relationship("Customer", back_populates="orders")
+
+    # Many-to-Many relationship between Products and Orders
+    products: Mapped[List["Product"]] = relationship("Product", secondary=order_products, back_populates="orders")
+
+
+
+
+class Product(Base):
+    __tablename__ = "products"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    price: Mapped[float] = mapped_column(Integer, nullable=False)
+
+    # Many-to-Many relationship between Products and Orders
+    orders: Mapped[List["Order"]] = relationship("Order", secondary=order_products, back_populates="products")
+
+#Schemas~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class CustomerSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Customer
+        include_relationships = True
+        load_instance = True
+
+class OrderSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Order
+        include_relationships = True
+        load_instance = True
+
+class ProductsSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Product
+        include_relationships = True
+        load_instance = True
+
+# Initialize Schemas
+customer_schema = CustomerSchema()
+customers_schema = CustomerSchema(many=True)
+order_schema = OrderSchema()
+orders_schema = OrderSchema(many=True)
+product_schema = ProductsSchema()
+products_schema = ProductsSchema(many=True)
+
+# Routes~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Customer Routes~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Register a customer
+@app.route('/customers', methods=['POST']) 
+def create_customer():
+    try:
+        customer_data = customer_schema.load(request.json)    
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+
+    new_customer = Customer(name=customer_data.name, email=customer_data.email)
+    db.session.add(new_customer)
+    db.session.commit()
+
+    return customer_schema.jsonify(new_customer), 201
+
+# Pull all customers
+@app.route('/customers', methods=['GET'])
+def get_customers():
+    query = Select(Customer)
+    customers = db.session.execute(query).scalars().all()
+
+    return customers_schema.jsonify(customers), 200
+
+
+# Pull one customer by ID
+@app.route('/customers/<int:id>', methods=['GET'])
+def get_customer(id):
+    customer = db.session.get(Customer, id)
+    return customer_schema.jsonify(customer), 200
+
+
+# Update a customer by ID
+@app.route('/customers/<int:id>', methods=['PUT'])
+def update_customer(id):
+    customer = db.session.get(Customer, id)
+
+    if not customer:
+        return jsonify({"message": "Customer not found"}), 400
+
+    try:
+        customer_data = customer_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+
+    customer.name = customer_data.name
+    customer.email = customer_data.email
+
+    db.session.commit()
+    return customer_schema.jsonify(customer), 200      
+    
+# Delete a customer by ID
+@app.route('/customers/<int:id>', methods=['DELETE'])
+def delete_customer(id):
+    customer = db.session.get(Customer, id)
+
+    if not customer:
+        return jsonify({"message": "Customer not found"}), 400
+    
+    db.session.delete(customer)
+    db.session.commit()
+
+    return jsonify({"message": f"Successfully deleted customer {id}"}), 200
+
+#Product Routes~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Create a product
+@app.route('/products', methods=['POST'])
+def create_product():
+    try:
+        product_data = product_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+
+    new_product = Product(name=product_data.name, price=product_data.price)
+    db.session.add(new_product)
+    db.session.commit()
+
+    return product_schema.jsonify(new_product), 201
+
+# Pull all products
+@app.route('/products', methods=['GET'])
+def get_products():
+    query = Select(Product)
+    products = db.session.execute(query).scalars().all()
+
+    return products_schema.jsonify(products), 200
+
+# Pull one product by ID
+@app.route('/products/<int:id>', methods=['GET'])
+def get_product(id):
+    product = db.session.get(Product, id)
+    return product_schema.jsonify(product), 200
+
+# Update a product by ID
+@app.route('/products/<int:id>', methods=['PUT'])
+def update_product(id):
+    product = db.session.get(Product, id)
+
+    if not product:
+        return jsonify({"message": "Product not found"}), 400
+
+    try:
+        product_data = product_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+
+    product.name = product_data.name
+    product.price = product_data.price
+
+    db.session.commit()
+    return product_schema.jsonify(product), 200
+
+# Delete a product by ID
+@app.route('/products/<int:id>', methods=['DELETE'])
+def delete_product(id):
+    product = db.session.get(Product, id)
+
+    if not product:
+        return jsonify({"message": "Product not found"}), 400
+
+    db.session.delete(product)
+    db.session.commit()
+
+    return jsonify({"message": f"Successfully deleted product {id}"}), 200
+
+
+
+#Order Routes~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Create a order
+@app.route('/orders', methods=['POST'])
+def create_order(customer_id, order_date):
+    try:
+        order_data = order_schema.load(request.json)
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+        
+
+    new_order = Order(order_date=order_data.date, customer_id=customer_id)
+    db.session.add(new_order)
+    db.session.commit()
+
+    return order_schema.jsonify(new_order), 201
+
+
+# Add a product to an order
+@app.route('/orders/<int:order_id>/products/<int:product_id>', methods=['GET'])
+def add_product_to_order(order_id, product_id):
+    order = db.session.get(Order, order_id)
+    product = db.session.get(Product, product_id)
+
+
+    order.products.append(product)
+    db.session.commit()
+
+    return jsonify({"message": f"Product {product.id} added to Order {order.name}"}), 200
+
+
+
+# Add multiple orders to a customer
+@app.route('/customers/<int:customer_id>/orders', methods=['POST'])
+def add_orders_to_customer(customer_id):
+    customer = db.session.get(Customer, customer_id)
+    order_data = request.json
+
+    for id in order_data['order_ids']:
+        order = db.session.get(Order, id)
+        customer.orders.append(order)
+        db.session.commit()
+
+    return jsonify({"message": f"Orders added to Customer {customer.name}"}), 200
+    
+
+# Show orders for a customer
+@app.route('/customers/my_orders/<int:id>', methods=['GET'])
+def my_orders(id):
+    customer = db.session.get(Customer, id)
+    return orders_schema.jsonify(customer.orders), 200
+
+
+# Delete an order by ID
+@app.route('/orders/<int:id>', methods=['DELETE'])
+def delete_order(id):
+    order = db.session.get(Order, id)
+
+    if not order:
+        return jsonify({"message": "Order not found"}), 400
+
+    db.session.delete(order)
+    db.session.commit()
+
+    return jsonify({"message": f"Successfully deleted order {id}"}), 200
+
+
+
+if __name__ == "__main__":
+    with app.app_context():
+        #db.drop_all()
+        db.create_all()
+    
+    app.run(debug=True)
